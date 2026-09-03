@@ -1,0 +1,8 @@
+.env
+.venv/
+.pycache/
+__pycache__/
+*.py[cod]
+accountability.db
+accountability.db-journal
+.DS_Store
