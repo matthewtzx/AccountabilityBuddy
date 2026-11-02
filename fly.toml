@@ -1,0 +1,20 @@
+app = "accountability-buddy"
+primary_region = "sin"
+
+[build]
+
+[env]
+  BOT_TIMEZONE = "Asia/Singapore"
+  ACCOUNTABILITY_DB_PATH = "/data/accountability.db"
+
+[mounts]
+  source = "data"
+  destination = "/data"
+
+[processes]
+  app = "python bot.py"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"
+  processes = ["app"]
