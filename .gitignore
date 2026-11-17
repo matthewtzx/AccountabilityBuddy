@@ -5,3 +5,5 @@ __pycache__/
 *.py[cod]
 accountability.db
 accountability.db-journal
+.pytest_cache/
+.DS_Store

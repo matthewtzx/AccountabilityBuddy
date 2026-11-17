@@ -1,66 +1,83 @@
-# Telegram Accountability Bot
+# AccountabilityBuddy
 
-This Python bot creates recurring accountability tasks, sends reminders at a
-chosen time, and lets users mark tasks complete with a Telegram button. Tasks
-are stored in a local SQLite database and survive bot restarts.
+A Telegram group bot that reminds a small group to do shared recurring tasks
+and lets each person tick off their own name.
 
-## Features
+## What it does
 
-- Create a task with `/addtask`.
-- Repeat it every N days or on selected days of the week.
-- Select one or more registered people who must complete it.
-- Receive a reminder at a chosen time.
-- Let each assignee mark only themselves complete from the reminder button.
-- See everyone's individual completion status in the group.
-- View the task list with `/deletetask`, or remove one with `/deletetask NUMBER`.
-- Keep task numbers consecutive after a task is removed.
+- `/join` lets a member be picked for tasks in that group.
+- `/addtask` creates a task: name, schedule (every N days or chosen weekdays),
+  reminder time and the people involved.
+- At 12am on each day a task is due, the bot posts one overview of the day's
+  tasks with a checklist: one button per person per task.
+- At the reminder time it posts a separate reminder with the same buttons.
+- Each person taps their own name to tick or untick. A tick posts
+  "[name] has completed [task]", and the last tick also posts that everyone
+  has completed it. The overview and the reminder both update.
+- `/tasks` lists tasks and today's status. `/edittask NUMBER` and
+  `/deletetask NUMBER` change or remove a task; anyone in the group can.
+- `/cancel` stops creating or editing a task.
 
-## 1. Create a Telegram bot
+All times use one timezone, `Asia/Singapore` by default (`BOT_TIMEZONE`).
+The bot only works in group chats.
 
-1. Open Telegram and start a chat with **@BotFather**.
-2. Send `/newbot` and follow the prompts.
-3. Copy the bot token BotFather gives you. Treat it like a password.
+## Files
 
-## 2. Set up the project
+| File | Holds |
+|---|---|
+| `bot.py` | Telegram handlers, the guided flows and the 30-second scheduler |
+| `logic.py` | Parsing, schedule rules and message rendering (no I/O) |
+| `storage.py` | SQLite tables, the upgrade of older databases, and all queries |
+| `tests/` | pytest suite; acceptance tests, named by UAT case ID |
+
+## 1. Create the bot
+
+1. In Telegram, message **@BotFather**, send `/newbot` and follow the prompts.
+2. Copy the token. Treat it like a password; never commit it.
+3. Send `/setprivacy` to BotFather, pick the bot and choose **Disable**.
+   Without this the bot cannot read plain-text answers to `/addtask` in a
+   group. If the bot is already in a group, remove it and add it again
+   afterwards: the change only applies when it joins.
+
+## 2. Run it locally
+
+Python 3.12 (the version the Docker image uses):
 
 ```bash
-python3 -m venv .venv
+python3.12 -m venv .venv
 source .venv/bin/activate
-python -m pip install -r requirements.txt
-```
-
-On Windows PowerShell, activate with `.venv\Scripts\Activate.ps1`.
-
-## 3. Set the token and run the bot
-
-On macOS or Linux:
-
-```bash
+python -m pip install -r requirements-dev.txt
 export TELEGRAM_BOT_TOKEN="your_token_from_botfather"
 python bot.py
 ```
 
-On Windows PowerShell:
+Data is saved in `accountability.db`; set `ACCOUNTABILITY_DB_PATH` to move it.
+Older databases are upgraded in place on start, and existing rows are kept.
 
-```powershell
-$env:TELEGRAM_BOT_TOKEN="your_token_from_botfather"
-python bot.py
+## 3. Tests
+
+```bash
+python -m pytest
 ```
 
-The default timezone is `Asia/Singapore`. To use another IANA timezone, set it
-before starting the bot, for example `export BOT_TIMEZONE="America/New_York"`.
+To try the 12am overview without waiting, run the bot with a `BOT_TIMEZONE`
+where midnight is a few minutes away.
 
-Open your bot in Telegram and send `/start`. In a group, every person who should
-be selectable must send `/join` once. Telegram's Bot API does not provide bots
-with a complete list of ordinary group members, so the bot can only offer people
-who have interacted with it in that group. After everyone has joined, use
-`/addtask` and select the assignees during setup.
+## 4. Deploy (Fly.io)
 
-When a reminder arrives, an assigned person can press **Mark myself complete**.
-The group message updates that person's status only and keeps the other members
-pending until they complete it themselves.
+`fly.toml` mounts a volume at `/data` for the database and sets the timezone.
+Set the token as a secret, never in a file:
 
-Keep the terminal open while the bot is running. Press `Ctrl+C` to stop it.
+```bash
+fly secrets set TELEGRAM_BOT_TOKEN=...
+fly deploy
+```
 
-Tasks are saved in `accountability.db`. Override the location with the
-`ACCOUNTABILITY_DB_PATH` environment variable if needed.
+Before deploying a new version, copy `/data/accountability.db` off the volume
+as a backup, e.g. with `fly ssh sftp get /data/accountability.db`.
+
+## Reading habit metrics
+
+Streaks are not shown in the bot. `completions` holds one row per person,
+task and day ticked; `due_log` holds each task's due days, so the 80%
+and 7-day targets can be computed even after a schedule is edited.
