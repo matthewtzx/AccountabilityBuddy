@@ -23,7 +23,7 @@ A Telegram group bot (python-telegram-bot v22, SQLite) split into three layers. 
 
 - **`logic.py`**: pure functions, no I/O. Input parsing (`parse_*`), schedule rules (`task_is_due`, `reminder_passed`), and rendering of overview/reminder messages and inline keyboards. Handles Telegram limits by chunking overviews (`MAX_MESSAGE_CHARS`, `MAX_BUTTONS`).
 - **`storage.py`**: all SQL. `initialize_db()` creates the schema and upgrades older databases in place, so schema changes must keep existing rows. `task_view()` builds the `TaskView` that `logic.py` renders. The DB path comes from `ACCOUNTABILITY_DB_PATH`, read at import into `storage.DB_PATH`.
-- **`bot.py`**: Telegram handlers, the `/addtask` and `/edittask` `ConversationHandler` flows (15-minute timeout, per-user drafts), and the scheduler.
+- **`bot.py`**: Telegram handlers, the `/addtask` and `/edittask` flows, and the scheduler. Both flows share one `ConversationHandler` (15-minute timeout, one draft per user per chat), so starting either command replaces an open flow. Flow steps with buttons are sent through `ask()`, which records the message ID; callback steps are wrapped in `@flow_button`, which ignores taps on any other message.
 
 ### Things that span files
 
@@ -36,6 +36,12 @@ A Telegram group bot (python-telegram-bot v22, SQLite) split into three layers. 
 ### Testing
 
 `tests/conftest.py` gives every test a fresh temp SQLite DB (autouse, patches `storage.DB_PATH`), three members (`A`, `B`, `C`) in chat `CHAT`, a `FakeBot` that records `send_message` / `edit_message_text` calls, and a `make_task()` helper. Test names reference UAT case IDs; keep those when editing tests.
+
+Two levels of flow tests:
+- `tests/test_flows.py` calls handlers directly. Its fake `reply_text` returns a message ID and `tap()` presses the latest message's buttons, because `@flow_button` checks message IDs.
+- `tests/test_routing.py` builds the real `Application` (`build_application(token, request=FakeTelegram())`) and sends raw update JSON, so `ConversationHandler` routing is covered. Each `Group` keeps its own event loop and sets it as current before building (PTB on Python 3.9 needs that). Use this level for anything about which handler receives an update.
+
+The UAT results sheet is kept outside the repo, and `.gitignore` excludes `*UAT*.csv`.
 
 ## Deployment notes
 

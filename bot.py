@@ -22,6 +22,7 @@ from telegram.ext import (
     TypeHandler,
     filters,
 )
+from telegram.request import BaseRequest
 from telegram.warnings import PTBUserWarning
 
 import storage
@@ -132,6 +133,33 @@ def get_draft(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Optional[di
     return drafts(context).get(update.effective_chat.id)
 
 
+def replaced_notice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
+    """Starting a flow ends any open one in this chat; say so."""
+    previous = get_draft(update, context)
+    if previous is None:
+        return ""
+    action = "editing" if previous["mode"] == "edit" else "task creation"
+    return f"(your unfinished {action} was cancelled.)\n\n"
+
+
+async def ask(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str, reply_markup) -> None:
+    """Send a step with buttons and remember its message, so only those buttons answer it."""
+    message = await update.effective_message.reply_text(text, reply_markup=reply_markup)
+    get_draft(update, context)["message_id"] = message.message_id
+
+
+def flow_button(handler):
+    """A tap only counts on the message of the tapper's own open flow."""
+    @functools.wraps(handler)
+    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        query, draft = update.callback_query, get_draft(update, context)
+        if draft is None or query.message is None or query.message.message_id != draft.get("message_id"):
+            await query.answer(STALE_BUTTON_TEXT, show_alert=True)
+            return None  # stay at the current step
+        return await handler(update, context)
+    return wrapper
+
+
 async def reply(update: Update, text: str, reply_markup=None) -> None:
     """Answer in place when the update is a button tap, otherwise reply to the message."""
     if update.callback_query is not None:
@@ -239,6 +267,7 @@ def apply_schedule_text(draft: dict, text: str) -> Optional[str]:
     return None
 
 
+@flow_button
 async def on_schedule_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
@@ -297,8 +326,9 @@ async def add_task(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if not members:
         await update.message.reply_text("nobody has joined yet. everyone involved should send /join first.")
         return ConversationHandler.END
+    notice = replaced_notice(update, context)
     drafts(context)[chat_id] = {"mode": "add", "assignees": {user_id} & members}
-    await update.message.reply_text(NAME_PROMPT)
+    await update.message.reply_text(notice + NAME_PROMPT)
     return ADD_NAME
 
 
@@ -308,7 +338,7 @@ async def add_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         await update.message.reply_text(NAME_ERROR)
         return ADD_NAME
     get_draft(update, context)["name"] = name
-    await update.message.reply_text("how often should it be done?", reply_markup=schedule_keyboard())
+    await ask(update, context, "how often should it be done?", schedule_keyboard())
     return ADD_SCHEDULE_TYPE
 
 
@@ -328,12 +358,11 @@ async def add_time(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         return ADD_TIME
     draft = get_draft(update, context)
     draft["reminder_time"] = reminder_time
-    await update.message.reply_text(
-        PEOPLE_PROMPT, reply_markup=people_keyboard(update.effective_chat.id, draft["assignees"])
-    )
+    await ask(update, context, PEOPLE_PROMPT, people_keyboard(update.effective_chat.id, draft["assignees"]))
     return ADD_PEOPLE
 
 
+@flow_button
 async def add_people(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     assignees = await on_person_toggle(update, context)
     if assignees is None:
@@ -360,10 +389,11 @@ async def add_people(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 # ---------------------------------------------------------------- /edittask
 
 @group_only
-async def edit_task(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def edit_task(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Optional[int]:
     task = await find_task_from_args(update, context, "edittask")
     if task is None:
-        return ConversationHandler.END
+        return None  # keep any flow that is already open
+    notice = replaced_notice(update, context)
     drafts(context)[update.effective_chat.id] = {"mode": "edit", "task_id": task["id"]}
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("name", callback_data="edit:name"),
@@ -371,13 +401,13 @@ async def edit_task(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         [InlineKeyboardButton("reminder time", callback_data="edit:time"),
          InlineKeyboardButton("people involved", callback_data="edit:people")],
     ])
-    await update.message.reply_text(
-        f"what would you like to change?\n\n{describe_task(task)}\n\nsend /cancel to stop.",
-        reply_markup=keyboard,
-    )
+    await ask(update, context,
+              f"{notice}what would you like to change?\n\n{describe_task(task)}\n\nsend /cancel to stop.",
+              keyboard)
     return EDIT_CHOICE
 
 
+@flow_button
 async def edit_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
@@ -426,17 +456,17 @@ async def edit_schedule_value(update: Update, context: ContextTypes.DEFAULT_TYPE
                 [InlineKeyboardButton("restart the cycle from today", callback_data="cycle:restart")],
                 [InlineKeyboardButton("continue the existing cycle", callback_data="cycle:continue")],
             ])
-            await update.message.reply_text(
-                f"should the cycle restart from today, or continue from when it started "
-                f"({task['start_date']})?",
-                reply_markup=keyboard,
-            )
+            await ask(update, context,
+                      f"should the cycle restart from today, or continue from when it started "
+                      f"({task['start_date']})?",
+                      keyboard)
             return EDIT_CYCLE
         # A weekday task has no cycle to continue, so the new one starts today.
         fields["start_date"] = now().date().isoformat()
     return await save_edit(update, context, fields)
 
 
+@flow_button
 async def edit_cycle(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
@@ -454,6 +484,7 @@ async def edit_time(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     return await save_edit(update, context, {"reminder_time": reminder_time})
 
 
+@flow_button
 async def edit_people(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     assignees = await on_person_toggle(update, context)
     if assignees is None:
@@ -693,8 +724,11 @@ async def post_init(application: Application) -> None:
     application.job_queue.run_repeating(scheduler_tick, interval=30, first=1)
 
 
-def build_application(token: str) -> Application:
-    application = Application.builder().token(token).post_init(post_init).build()
+def build_application(token: str, request: Optional[BaseRequest] = None) -> Application:
+    builder = Application.builder().token(token).post_init(post_init)
+    if request is not None:  # tests pass a fake Telegram
+        builder = builder.request(request).get_updates_request(request)
+    application = builder.build()
     text = filters.TEXT & ~filters.COMMAND
     timeout = {ConversationHandler.TIMEOUT: [TypeHandler(Update, on_timeout)]}
     cancel_handler = [CommandHandler("cancel", cancel)]
@@ -702,23 +736,16 @@ def build_application(token: str) -> Application:
     application.add_handler(MessageHandler(filters.ALL, refresh_member), group=-1)
     application.add_handler(CallbackQueryHandler(refresh_member), group=-1)
 
+    # One handler for both flows: a person has at most one open flow per chat, and
+    # starting either command replaces it.
     application.add_handler(ConversationHandler(
-        entry_points=[CommandHandler("addtask", add_task)],
+        entry_points=[CommandHandler("addtask", add_task), CommandHandler("edittask", edit_task)],
         states={
             ADD_NAME: [MessageHandler(text, add_name)],
             ADD_SCHEDULE_TYPE: [CallbackQueryHandler(on_schedule_type, pattern=r"^schedule:")],
             ADD_SCHEDULE_VALUE: [MessageHandler(text, add_schedule_value)],
             ADD_TIME: [MessageHandler(text, add_time)],
             ADD_PEOPLE: [CallbackQueryHandler(add_people, pattern=r"^assign:")],
-            **timeout,
-        },
-        fallbacks=cancel_handler,
-        allow_reentry=True,
-        conversation_timeout=FLOW_TIMEOUT_SECONDS,
-    ))
-    application.add_handler(ConversationHandler(
-        entry_points=[CommandHandler("edittask", edit_task)],
-        states={
             EDIT_CHOICE: [CallbackQueryHandler(edit_choice, pattern=r"^edit:")],
             EDIT_NAME: [MessageHandler(text, edit_name)],
             EDIT_SCHEDULE_TYPE: [CallbackQueryHandler(on_schedule_type, pattern=r"^schedule:")],

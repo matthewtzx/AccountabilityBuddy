@@ -1,5 +1,6 @@
 """Drive the guided /addtask, /edittask and /deletetask handlers step by step with fake updates."""
 import asyncio
+import itertools
 from types import SimpleNamespace
 
 import pytest
@@ -19,6 +20,8 @@ class Chat:
         self.chat = SimpleNamespace(id=CHAT, type=chat_type)
         self.replies = []
         self.context = SimpleNamespace(user_data={}, args=[], bot=None)
+        self._message_ids = itertools.count(1)
+        self.last_message_id = None  # the bot's latest message, whose buttons a tap presses
 
     def _update(self, message=None, query=None):
         return SimpleNamespace(
@@ -32,6 +35,8 @@ class Chat:
 
         async def reply_text(body, reply_markup=None, **_):
             replies.append((body, reply_markup))
+            self.last_message_id = next(self._message_ids)
+            return SimpleNamespace(message_id=self.last_message_id)
 
         message = SimpleNamespace(text=text, reply_text=reply_text)
         self.context.args = list(args)
@@ -53,7 +58,7 @@ class Chat:
         query = SimpleNamespace(
             data=data, answer=answer, edit_message_text=edit_message_text,
             edit_message_reply_markup=edit_message_reply_markup,
-            message=SimpleNamespace(chat=self.chat, message_id=1),
+            message=SimpleNamespace(chat=self.chat, message_id=self.last_message_id),
         )
         state = asyncio.run(handler(self._update(query=query), self.context))
         self.answers = answers
@@ -145,9 +150,9 @@ def test_edit_name_by_non_creator_tc33():
 def test_edit_bad_number_tc46():
     make_task()
     chat = Chat()
-    assert chat.send(app.edit_task, args=["99"]) == END
+    assert chat.send(app.edit_task, args=["99"]) is None  # no flow starts
     assert "couldn't find task 99" in chat.last
-    assert chat.send(app.edit_task) == END
+    assert chat.send(app.edit_task) is None
     assert "#1 Daily devo" in chat.last  # no number shows the list
 
 
