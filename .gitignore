@@ -7,3 +7,5 @@ accountability.db
 accountability.db-journal
 .pytest_cache/
 .DS_Store
+# UAT results are kept outside the repo
+*UAT*.csv

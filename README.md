@@ -16,7 +16,9 @@ and lets each person tick off their own name.
   has completed it. The overview and the reminder both update.
 - `/tasks` lists tasks and today's status. `/edittask NUMBER` and
   `/deletetask NUMBER` change or remove a task; anyone in the group can.
-- `/cancel` stops creating or editing a task.
+- `/cancel` stops creating or editing a task. Each person has one of these
+  at a time per group: starting `/addtask` or `/edittask` again replaces the
+  unfinished one, and only the person who started it can tap its buttons.
 
 All times use one timezone, `Asia/Singapore` by default (`BOT_TIMEZONE`).
 The bot only works in group chats.
@@ -28,7 +30,7 @@ The bot only works in group chats.
 | `bot.py` | Telegram handlers, the guided flows and the 30-second scheduler |
 | `logic.py` | Parsing, schedule rules and message rendering (no I/O) |
 | `storage.py` | SQLite tables, the upgrade of older databases, and all queries |
-| `tests/` | pytest suite; acceptance tests, named by UAT case ID |
+| `tests/` | pytest suite; acceptance tests, named by UAT case ID. `test_routing.py` sends fake Telegram updates through the real bot, with no network |
 
 ## 1. Create the bot
 
